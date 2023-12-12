@@ -1,0 +1,236 @@
+---
+title: "NYPD Shooting Incident Data Report"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This project focuses on tidying, cleaning, organizing, visualizing, and analyzing the data from the NYPD Shooting Data Report (Historical). It is completely accessible to the public and can be found at https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic. 
+
+**Import Libraries and Data**
+
+The first step of importing the necessary libraries is essential to enable working with the data from the dataset of interest. In this case, the code is reading in the NYPD Shooting Data report as a CSV file. 
+
+```{r data}
+
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+urls <- str_c(url_in)
+urls
+NYPD_data = read.csv(urls[1])
+
+#Summary of the Data
+summary(NYPD_data)
+```
+Ensure the data types are correct:
+
+After checking the summary and key aspects of the data, it is important to go through and check each object and correct the way each variable is being viwed in the code. For example, ensuring the "DATE" column is being treated as a date allows for accurate data manipulation later on. 
+
+```{r data1}
+#next make sure each column/variable is the correct type 
+NYPD_data <- NYPD_data %>%
+  mutate(INCIDENT_KEY = as.character(INCIDENT_KEY))
+NYPD_data <- NYPD_data %>%
+  mutate(OCCUR_DATE = as.Date(OCCUR_DATE, format="%m/%d/%y"))
+NYPD_data <- NYPD_data %>%
+  mutate(OCCUR_TIME = as.POSIXct(OCCUR_TIME, format="%H:%M:%S"))
+NYPD_data <- NYPD_data %>%
+  mutate(
+    PRECINCT = as.integer(PRECINCT),
+    JURISDICTION_CODE = as.integer(JURISDICTION_CODE)
+  )
+NYPD_data <- NYPD_data %>%
+  mutate(LOCATION_DESC = as.character(LOCATION_DESC))
+NYPD_data <- NYPD_data %>%
+  mutate(STATISTICAL_MURDER_FLAG = as.logical(STATISTICAL_MURDER_FLAG))
+NYPD_data <- NYPD_data %>%
+  mutate(
+    X_COORD_CD = as.numeric(X_COORD_CD),
+    Y_COORD_CD = as.numeric(Y_COORD_CD),
+    Latitude = as.numeric(Latitude),
+    Longitude = as.numeric(Longitude)
+  )
+```
+
+**Identify Missing Values**
+
+This step is crucial in tidying the data - understanding which values are missing allows for further insight in how to move forward with visualization and analysis. Taking note of any specific values or patterns in the data also gives insight into which columns to keep and might be useful for analysis. 
+
+```{r data2}
+#see if there are any missing values in any one of the columns (to help decide what to keep)
+#will handle any missing data as well further down
+
+missing_val <- sapply(NYPD_data, function(x) sum(x %in% c("", NA)))
+missing_val_df <- data.frame(Column = names(missing_val), `Missing Values` = missing_val)
+print(missing_val_df)
+
+#how much is missing from each data type - has a little sway in choosing columns
+#NOTICE LOC_OF_OCCUR_DESC BEGAN IN 2022 (LOTS OF MISSING VALUES) AND NO DESCRIPTION ON COLUMNS DESCRIPTION ON WEBSITE (SAME WITH LOC_cLASSFCTN_DESC)
+#LOC_DESC ALSO HAS A LOT OF BLANKS, BUT IS LISTED AS LOCATION OF SHOOTING INCIDENT
+#obviously perp age, sex, race have almost equivalent blanks
+#look and see occurrences in each thing to see what the columns are actually composed of
+#it also helps to view csv file in Excel!
+```
+
+**Select Important Columns/Variables**
+
+After exploring the data, transforming it, and identifying missing data, asking questions about the data allows for selecting the necessary columns or variables to work with. Given the initial columns, choosing variables related to location, demographic profiles of victims and perpetrators alike, as well as timeframes are all relevant topics to explore in analyzing trends in shooting incidents. 
+
+```{r data3}
+#eliminate columns (as seen below)
+#the following lines are selecting first what columns I believe are of importance
+
+important_vars <- c("INCIDENT_KEY", "OCCUR_DATE", "OCCUR_TIME", "BORO", "PRECINCT", "LOC_OF_OCCUR_DESC", "LOCATION_DESC","STATISTICAL_MURDER_FLAG", "PERP_AGE_GROUP", "PERP_SEX", "PERP_RACE", "VIC_AGE_GROUP","VIC_SEX", "VIC_RACE")
+NYPD_data <- NYPD_data %>% select(all_of(important_vars))
+```
+**Handling Missing Data/Tidy and Transform**
+
+Finalizing the data columns used for visualization and analysis allows for the next step of tidying and ensuring the columns are ready for manipulation. Removing any extreme or blank values is important to accurately represent the data.
+
+```{r data4}
+#after checking the data again using print(NYPD_data), can identify the following missing values, etc.
+#now can see the missing values in the columns we are actually keeping - can see LOC_OF_OCCUR_DESC and LOCATION_DESC are both missing a lot of values, as well as PERP information. The location variables could be due to a simple change in logging information, while the perpetrator information could be either missing due to witness testimony (a lack thereof) or cases that are still open, etc. 
+#Can also see that there are empty values in LOC_OF_OCCUR_DESC, there are empty and (null) in LOCATION_DESC, in perp age group there is a blank and (null) and two values 1020 and 940 as errors, in perp sex there is blank (null) and unknown, in perp race there is blank (null) and unknown.
+
+selected_columns <- c("LOC_OF_OCCUR_DESC", "LOCATION_DESC", "PERP_AGE_GROUP", "PERP_SEX", "PERP_RACE")
+
+filtered_data <- NYPD_data %>% 
+  filter(across(all_of(selected_columns), ~ !(. %in% c("", NA))))
+
+#can do print(filtered_data) to double-check
+
+#the code below deals with any missing values/checks for values as empty strings (so blanks), NA, and values listed as "null" by creating a new column with these values replaced as "unknown" to aid in analysis. This also accounts for those obvious typos found by looking  in the PERP_AGE_GROUP and adds them into the Unknown category to ensure as much accuracy as possible.  
+
+
+NYPD_data <- NYPD_data %>%
+  mutate(
+    LOC_OF_OCCUR_DESC = ifelse(tolower(LOC_OF_OCCUR_DESC) %in% c("", NA, "(null)", "u", "unknown", "unknown2"), "Unknown", tolower(LOC_OF_OCCUR_DESC)),
+    LOCATION_DESC = ifelse(tolower(LOCATION_DESC) %in% c("", NA, "(null)", "u", "unknown", "unknown2"), "Unknown", tolower(LOCATION_DESC)),
+    PERP_AGE_GROUP = ifelse(tolower(PERP_AGE_GROUP) %in% c("", NA, "1020", "224", "940", "(null)", "u", "unknown", "unknown2"), "Unknown", tolower(PERP_AGE_GROUP)),
+    PERP_SEX = ifelse(tolower(PERP_SEX) %in% c("", NA, "(null)", "u", "unknown", "unknown2"), "Unknown", tolower(PERP_SEX)),
+    PERP_RACE = ifelse(tolower(PERP_RACE) %in% c("", NA, "(null)", "u", "unknown", "unknown2"), "Unknown", tolower(PERP_RACE))
+  )
+
+#print(NYPD_data)
+
+#now that all is tidied, continue with visualization and analysis
+```
+
+**Data Visualization** 
+
+After cleaning and ensuring the data columns are ready for visualization and analysis, asking the important questions that you are interested in about the dataset guides the next steps forward. In this project, I am to explore the relationship between shooting incidents and time of year, incident frequency and time of day, incidents by area (in terms of precincts and boros), murders per each boro, and the differences in demographic profiles of victims and perpetrators. 
+
+```{r data5}
+#the bar chart below shows the month/time of year in which shootings occur the most frequently
+month_bar_chart <- NYPD_data %>%
+  group_by(Month = month(OCCUR_DATE, label = TRUE)) %>%
+  summarise(ShootingCount = n()) %>%
+  ggplot(aes(x = Month, y = ShootingCount, fill = Month)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Monthly Shooting Frequency", x = "Month", y = "Number of Shootings") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Paired")
+
+#the scatterplot below shows the hour of the day in which shootings occur the most frequently
+hour_scatterplot <- NYPD_data %>%
+     group_by(Hour = hour(OCCUR_TIME)) %>%
+     summarise(ShootingCount = n()) %>%
+     ggplot(aes(x = Hour, y = ShootingCount)) +
+     geom_point(color = "forestgreen", size = 3) +
+     labs(title = "Hourly Shooting Frequency", x = "Hour", y = "Number of Shootings") +
+     theme_minimal()
+
+print(month_bar_chart)
+print(hour_scatterplot)
+
+#This scatterplot shows the number of shootings by precinct and boro:
+precinct_boro_scatterplot <- NYPD_data %>%
+   group_by(BORO, PRECINCT) %>%
+   summarise(Count = n()) %>%
+   ggplot(aes(x = factor(PRECINCT), y = Count, fill = BORO)) +
+   geom_point(position = position_dodge(width = 0.8), size = 3, shape = 21, color = "black") +
+   labs(title = "Shootings Per Precinct and Boro", x = "Precinct", y = "Number of Shootings") +
+   theme_minimal() +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+   scale_x_discrete(breaks = seq(0, max(NYPD_data$PRECINCT), by = 10))
+
+
+#This bar chart shows the number of murders per boro.
+murder_boro_bar_chart <- NYPD_data %>%
+     filter(STATISTICAL_MURDER_FLAG == TRUE) %>%
+     group_by(BORO) %>%
+     summarise(MurderCount = n()) %>%
+     ggplot(aes(x = BORO, y = MurderCount)) +
+     geom_bar(stat = "identity", fill = "lightblue") +
+     labs(title = "Murders by Boro", x = "Boro", y = "Number of Murders") +
+     theme_minimal()
+
+print(precinct_boro_scatterplot)
+print(murder_boro_bar_chart)
+
+#This visualization shows the characteristics of both perpetrators and victims in one place for easy comparison.
+
+perp_and_vic <- rbind(
+  NYPD_data %>%
+    filter(!is.na(PERP_RACE)) %>%
+    group_by(Race = PERP_RACE, Type = "Perpetrator") %>%
+    summarise(Count = n()) %>%
+    mutate(Type = factor(Type)),
+  NYPD_data %>%
+    filter(!is.na(VIC_RACE)) %>%
+    group_by(Race = VIC_RACE, Type = "Victim") %>%
+    summarise(Count = n()) %>%
+    mutate(Type = factor(Type))
+)
+
+perp_and_vic_plot <- ggplot(perp_and_vic, aes(x = reorder(Race, -Count), y = Count, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  labs(title = "Most Common Age Group, Sex, and Race for Perpetrators and Victims", x = "Racial Group", y = "Number of Shootings") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+print(perp_and_vic_plot)
+```
+
+**Data Analysis - Linear Regression**
+
+Visualzing the data allows for further insights into the dataset and leads to more questions - specifically, I chose to explore the relationship between shootings and the hour of the day by developing a linear regression model to predict shootings based on time. This analysis allows for further insight by examining the coefficients, the residual standard error indicating the deviation of observed vs predicted values for shooting counts, and the F-statistic indicating the overall significance of the model.
+
+```{r data6}
+#This model shows linear regression analysis to predict shootings based on the time of day/hour
+linear_reg <- lm(n ~ Hour - 1, data = NYPD_data %>%
+              group_by(Hour = hour(OCCUR_TIME)) %>%
+              summarise(n = n()))
+
+
+summary(linear_reg)
+
+#The model above uses the data from the data on shootings on a given hour of the day (note that the - 1 portion is used to adjust for the lack of intercept, a common practice when analyzying time variables). The important statistical takeaways from the model include the coefficients, including Hour that has a high statistical significance, the residual standard error of 861.8 indicating the deviation of observed vs predicted values for shooting counts, and the F-statistic indicating the overall significance of the model (the p-value is very low, suggesting significance).
+```
+
+**Bias Identification and Conclusion**
+
+  Bias is an important aspect to address when analyzing and working with any type of dataset, particularly one that can be a sensitive topic for any number of people. The inherent biases I had walking into this project included the assumption that there would be a higher number of female victims of shootings, or potentially a closer margin with male victims, and that the specific boro of the Bronx would have the highest number of shootings based on my own exposure to news and other media. However, upon analysis of the data set both of these assumptions were deemed incorrect. It is also important to deal with personal biases in a broader context, and I mitigated this by cross-referencing with other news/media sources - it is interesting to know that shootings in New York have decreased significantly in recent times (approximately 25% as of June 2023). It is more important than ever to understand and analyze incoming data as trends change over time. The information uncovered in this dataset showed that the boros Brooklyn and the Bronx (and their associated precincts) were the most dangerous, particularly for males in the younger age group of 18-24. Because most shootings occurred at night and during the middle months of the year, taking precautions and moving forward with understanding these trends is highly useful. Analyzing and working with the data led me to ask further questions related to patterns in different location types, dwellings, and more specific patterns based on pepetrator and victim profiles - all of these are a solid foundation for future investigation. Overall, visualizing data in terms of perpetrator, victim, location, and time metrics and statistics allows for deeper insights that are consistent with current news and media sources. 
+
+**Sources:**
+
+- "Shootings in New York Drop by a Quarter as Surge of Violence Eases" - Hurubie Meko, New York Times (https://www.nytimes.com/2023/07/06/nyregion/shootings-nyc-crime.html?auth=login-google1tap&login=google1tap)
+- "NYPD Shooting Incident Data (Historic) - Data.Gov" (https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic)
+
+```{r data7}
+sessionInfo()
+
+
+
+
+
+
